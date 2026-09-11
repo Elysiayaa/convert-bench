@@ -1,0 +1,34 @@
+# Frontend / 前端依赖与构建产物
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+
+# Backend / Python 缓存与虚拟环境
+backend/.venv/
+backend/venv/
+backend/__pycache__/
+backend/**/*.py[cod]
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+
+# Runtime data / 运行时数据（保留目录，不提交用户文件）
+backend/data/*
+!backend/data/.gitkeep
+backend/storage/*
+!backend/storage/.gitkeep
+
+# Environment / 环境变量
+.env
+.env.local
+
+# IDE & OS / 编辑器与系统文件
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs / 日志
+*.log
+
