@@ -44,15 +44,16 @@ The current Web UI supports file upload, target-format selection, conversion sta
 
 - **End-to-end workflow / 完整链路** — upload, convert, query status, and download output.
 - **Failure-as-data / 失败即数据** — failed conversions are appended to a reusable JSONL dataset automatically.
-- **Built-in converters / 内置转换器** — UTF-8 TXT and Markdown conversion, plus same-extension copying.
+- **Converter registry / 转换器注册表** — pluggable `BaseConverter` implementations selected by source and target formats.
+- **Document and data converters / 文档与数据转换** — Markdown, Word, PDF, Excel, CSV, JSON, YAML, and subtitles.
 - **Persistent records / 任务持久化** — SQLAlchemy models backed by SQLite.
 - **Local-first storage / 本地优先存储** — explicit directories for inputs, outputs, and datasets.
 - **Modern Web UI / 现代前端** — Next.js 14, TypeScript, Tailwind CSS, and shadcn/ui conventions.
 - **Typed API / 类型化接口** — FastAPI, Pydantic schemas, and interactive OpenAPI documentation.
 - **Container-ready / 容器化运行** — separate images orchestrated by Docker Compose.
 
-> ConvertBench is currently an MVP. The text converters establish the full data loop; production document, image, and media engines are planned.  
-> ConvertBench 当前处于 MVP 阶段。文本转换器用于打通完整数据闭环，文档、图片和音视频引擎将在后续接入。
+> ConvertBench is currently an MVP. Pandoc-based conversion runs in the backend container; broader document, image, and media support is planned.  
+> ConvertBench 当前处于 MVP 阶段。Pandoc 转换在后端容器内运行，更广泛的文档、图片和音视频能力仍在规划中。
 
 ## Supported formats / 支持格式
 
@@ -60,8 +61,16 @@ The current Web UI supports file upload, target-format selection, conversion sta
 |---|---|---|---|
 | `txt` | `md` | ✅ Supported | Adds a title and preserves UTF-8 text / 添加标题并保留 UTF-8 文本 |
 | `md` | `txt` | ✅ Supported | Removes common Markdown markers / 移除常见 Markdown 标记 |
+| `md` | `docx` | ✅ Supported | Pandoc via pypandoc / 通过 pypandoc 调用 Pandoc |
+| `docx` | `md` | ✅ Supported | Pandoc with unwrapped Markdown output / Pandoc 输出不自动换行的 Markdown |
+| `md` | `pdf` | ✅ Supported | Pandoc + XeLaTeX + Noto CJK / 支持中文字体的 PDF |
+| `xlsx` | `json` | ✅ Supported | Preserves worksheets as named row arrays / 按工作表保留二维行数据 |
+| `csv` | `json` | ✅ Supported | Produces a JSON record array / 输出 JSON 记录数组 |
+| `json` | `yaml` | ✅ Supported | Safe YAML serialization / 安全序列化 YAML |
+| `yaml` | `json` | ✅ Supported | Safe YAML parsing / 安全解析 YAML |
+| `srt` | `vtt` | ✅ Supported | Converts subtitles to WebVTT / 转换为 WebVTT 字幕 |
 | Any valid extension | Same extension | ✅ Supported | Copies without content transformation / 原样复制文件 |
-| PDF / Office | Multiple formats | 🗓️ Planned | LibreOffice and Pandoc / 计划接入 LibreOffice、Pandoc |
+| Other PDF / Office pairs | Multiple formats | 🗓️ Planned | LibreOffice and additional Pandoc routes / 计划接入 LibreOffice 与更多 Pandoc 路由 |
 | Images | Multiple formats | 🗓️ Planned | ImageMagick or equivalent / 计划接入 ImageMagick 等工具 |
 | Audio / Video | Multiple formats | 🗓️ Planned | FFmpeg / 计划接入 FFmpeg |
 
@@ -176,6 +185,9 @@ Copy-Item .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
+For local `md → docx`, `docx → md`, and `md → pdf` conversion, install Pandoc separately. PDF output also requires XeLaTeX and a compatible CJK font. The Docker image installs these tools automatically and does not modify the host system.  
+本地运行上述文档转换时，还需自行安装 Pandoc；PDF 额外依赖 XeLaTeX 与兼容的中文字体。Docker 镜像会自动安装这些工具，不会修改宿主机环境。
+
 macOS or Linux:
 
 ```bash
@@ -265,24 +277,22 @@ The dataset stores metadata and error context, not a duplicate of file contents.
 
 ## Adding a converter / 添加转换器
 
-Converter routing lives in [`backend/app/services/converter.py`](./backend/app/services/converter.py). Add a branch to `convert_file`, write the result into `output_dir`, and return the resulting `Path`.  
-转换路由集中在 `convert_file` 函数中。新增格式时，将结果写入 `output_dir` 并返回输出文件路径。
+Converters live in [`backend/app/services/converter.py`](./backend/app/services/converter.py). Inherit `BaseConverter`, implement `convert(input_path, output_path)`, and register an instance in `converter_registry`.  
+转换器集中在该文件中。新增格式时需继承 `BaseConverter`、实现 `convert(input_path, output_path)`，并将实例注册到 `converter_registry`。
 
 ```python
-def convert_file(source: Path, output_dir: Path, target_format: str) -> Path:
-    source_format = normalize_format(source.suffix)
-    target_format = normalize_format(target_format)
-    output = output_dir / f"{source.stem}.{target_format}"
+class XMLToJSONConverter(BaseConverter):
+    source_format = "xml"
+    target_format = "json"
 
-    if (source_format, target_format) == ("csv", "json"):
-        # 在这里实现 CSV 到 JSON 的转换逻辑
-        convert_csv_to_json(source, output)
-        return output
+    def convert(self, input_path: Path, output_path: Path) -> None:
+        # 在这里完成转换，并确保结果写入 output_path
+        data = parse_xml(input_path)
+        output_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
-    # 未匹配的格式必须抛出异常，系统会自动采集失败样本
-    raise UnsupportedConversionError(
-        f"Unsupported conversion: {source_format} -> {target_format}"
-    )
+
+# 在全局注册表中注册转换器
+converter_registry.register(XMLToJSONConverter())
 ```
 
 For external engines, add the Python dependency to `backend/requirements.txt` or install the system package in `backend/Dockerfile`. Keep errors descriptive because they become evaluation signals.  
