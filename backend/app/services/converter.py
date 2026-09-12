@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from pathlib import Path
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from app.models.conversion_case import ConversionCase
@@ -20,6 +20,108 @@ class UnsupportedConversionError(ConversionError):
     """找不到匹配的转换器。"""
 
 
+class MissingDependencyError(ConversionError):
+    """转换所需的外部依赖不可用。"""
+
+
+class InvalidInputError(ConversionError):
+    """输入文件损坏或内容与格式不匹配。"""
+
+
+class FileReadError(ConversionError):
+    """输入文件读取失败。"""
+
+
+class FileWriteError(ConversionError):
+    """输出文件写入失败。"""
+
+
+ErrorType = Literal[
+    "unsupported_format",
+    "missing_dependency",
+    "invalid_input",
+    "converter_error",
+    "file_read_error",
+    "file_write_error",
+    "unknown",
+]
+
+
+def classify_error_type(error: BaseException | str | None) -> ErrorType:
+    """按照从具体到通用的顺序识别转换错误类型。"""
+
+    if error is None:
+        return "unknown"
+    if isinstance(error, UnsupportedConversionError):
+        return "unsupported_format"
+    if isinstance(error, MissingDependencyError):
+        return "missing_dependency"
+    if isinstance(error, InvalidInputError):
+        return "invalid_input"
+    if isinstance(error, FileReadError):
+        return "file_read_error"
+    if isinstance(error, FileWriteError):
+        return "file_write_error"
+
+    message = str(error).strip()
+    if not message:
+        return "unknown"
+
+    normalized = message.casefold()
+    if "unsupported conversion" in normalized:
+        return "unsupported_format"
+    if any(
+        marker in normalized
+        for marker in (
+            "pandoc is unavailable",
+            "pypandoc is not installed",
+            "no pandoc was found",
+            "xelatex not found",
+            "xelatex is unavailable",
+            "ffmpeg not found",
+            "ffmpeg is unavailable",
+            "missing dependency",
+        )
+    ):
+        return "missing_dependency"
+    if any(
+        marker in normalized
+        for marker in (
+            "not a zip file",
+            "invalid input",
+            "invalid data found",
+            "file is corrupted",
+            "corrupt file",
+            "does not match extension",
+            "expecting value",
+        )
+    ):
+        return "invalid_input"
+    if any(
+        marker in normalized
+        for marker in (
+            "input file does not exist",
+            "failed to read input",
+            "cannot read input",
+            "unable to read input",
+            "file read error",
+        )
+    ):
+        return "file_read_error"
+    if any(
+        marker in normalized
+        for marker in (
+            "failed to write output",
+            "cannot write output",
+            "unable to write output",
+            "read-only file system",
+            "file write error",
+        )
+    ):
+        return "file_write_error"
+    return "converter_error"
+
+
 class BaseConverter(ABC):
     """所有格式转换器的统一基类。"""
 
@@ -31,9 +133,15 @@ class BaseConverter(ABC):
         """将输入文件转换后写入指定输出路径。"""
 
     def _prepare(self, input_path: Path, output_path: Path) -> None:
-        if not input_path.is_file():
-            raise ConversionError(f"Input file does not exist / 输入文件不存在: {input_path}")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if not input_path.is_file():
+                raise FileReadError(f"Input file does not exist / 输入文件不存在: {input_path}")
+        except OSError as exc:
+            raise FileReadError(f"Failed to read input / 输入文件读取失败: {exc}") from exc
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise FileWriteError(f"Failed to write output / 输出目录创建失败: {exc}") from exc
 
     def _run_safely(self, input_path: Path, output_path: Path, action: Callable[[], None]) -> None:
         """统一清理失败时可能产生的不完整输出。"""
@@ -44,13 +152,27 @@ class BaseConverter(ABC):
             if not output_path.is_file():
                 raise ConversionError("Converter produced no output / 转换器未生成输出文件")
         except ConversionError:
-            output_path.unlink(missing_ok=True)
+            self._remove_partial_output(output_path)
             raise
         except Exception as exc:
-            output_path.unlink(missing_ok=True)
+            self._remove_partial_output(output_path)
+            error_filename = Path(exc.filename) if isinstance(exc, OSError) and exc.filename else None
+            if error_filename == input_path:
+                raise FileReadError(f"Failed to read input / 输入文件读取失败: {exc}") from exc
+            if error_filename in (output_path, output_path.parent):
+                raise FileWriteError(f"Failed to write output / 输出文件写入失败: {exc}") from exc
             raise ConversionError(
                 f"{self.source_format} -> {self.target_format} failed / 转换失败: {exc}"
             ) from exc
+
+    @staticmethod
+    def _remove_partial_output(output_path: Path) -> None:
+        """尽力清理不完整输出，但不能覆盖原始转换异常。"""
+
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class PandocConverter(BaseConverter):
@@ -65,7 +187,7 @@ class PandocConverter(BaseConverter):
             try:
                 import pypandoc
             except ImportError as exc:
-                raise ConversionError("pypandoc is not installed / 未安装 pypandoc") from exc
+                raise MissingDependencyError("pypandoc is not installed / 未安装 pypandoc") from exc
 
             try:
                 pypandoc.convert_file(
@@ -76,7 +198,7 @@ class PandocConverter(BaseConverter):
                     extra_args=self.extra_args,
                 )
             except OSError as exc:
-                raise ConversionError(
+                raise MissingDependencyError(
                     "Pandoc is unavailable; use the backend Docker image or install Pandoc locally / "
                     "Pandoc 不可用，请使用后端 Docker 镜像或在本地安装 Pandoc"
                 ) from exc
@@ -344,7 +466,11 @@ def convert_file(source: Path, output_dir: Path, target_format: str) -> Path:
     return output_path
 
 
-def append_failure_dataset(case: "ConversionCase", dataset_dir: Path) -> None:
+def append_failure_dataset(
+    case: "ConversionCase",
+    dataset_dir: Path,
+    error: BaseException | str | None = None,
+) -> None:
     """追加一条可回放的失败样本。"""
 
     dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -355,6 +481,7 @@ def append_failure_dataset(case: "ConversionCase", dataset_dir: Path) -> None:
         "target_format": case.target_format,
         "file_size": case.file_size,
         "error_message": case.error_message,
+        "error_type": classify_error_type(error if error is not None else case.error_message),
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
     with (dataset_dir / "conversion_failures.jsonl").open("a", encoding="utf-8") as file:

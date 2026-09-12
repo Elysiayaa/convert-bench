@@ -53,10 +53,10 @@ async def create_conversion(
         output_path = convert_file(input_path, output_dir, target_format)
         case.status = "succeeded"
         case.output_path = str(output_path)
-    except Exception as exc:  # Capture converter failures / 统一沉淀转换失败
+    except Exception as exc:  # 统一沉淀转换失败及其错误分类
         case.status = "failed"
         case.error_message = str(exc)
-        append_failure_dataset(case, settings.storage_root / "datasets")
+        append_failure_dataset(case, settings.storage_root / "datasets", error=exc)
 
     db.commit()
     db.refresh(case)

@@ -222,6 +222,9 @@ Windows 环境请将 `cp` 替换为 `Copy-Item`。提交修改前建议运行类
 | `GET` | `/api/conversions` | List the latest 100 tasks / 查询最近 100 条任务 |
 | `GET` | `/api/conversions/{id}` | Get one task / 查询单个任务 |
 | `GET` | `/api/conversions/{id}/download` | Download a successful output / 下载成功任务的结果 |
+| `GET` | `/api/badcases` | Filter, sort, and paginate failure cases / 筛选、排序并分页查询失败案例 |
+| `GET` | `/api/badcases/stats` | Aggregate failure statistics / 查询失败案例统计 |
+| `GET` | `/api/badcases/{case_id}` | Get one failure case / 查询单条失败案例 |
 
 Create a conversion / 创建转换任务：
 

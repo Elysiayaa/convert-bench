@@ -1,9 +1,10 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { ArrowRight, Database, FileUp, Sparkles } from "lucide-react";
+import { ArrowRight, Database, FileUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { API_BASE_URL } from "@/lib/api";
 
 type Conversion = {
   id: string;
@@ -13,8 +14,6 @@ type Conversion = {
   original_filename: string;
   error_message: string | null;
 };
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export default function HomePage() {
   const [file, setFile] = useState<File | null>(null);
@@ -46,13 +45,8 @@ export default function HomePage() {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.16),_transparent_35%)]">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-10">
-        <nav className="flex items-center gap-3 font-semibold tracking-tight">
-          <span className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Sparkles size={18} /></span>
-          ConvertBench
-        </nav>
-
+    <main className="min-h-[calc(100vh-4rem)] overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.16),_transparent_35%)]">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-6xl flex-col px-6">
         <section className="grid flex-1 items-center gap-14 py-16 lg:grid-cols-[1.05fr_.95fr]">
           <div>
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border bg-card/70 px-3 py-1 text-xs text-muted-foreground">
