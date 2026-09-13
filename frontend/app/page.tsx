@@ -1,10 +1,11 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { ArrowRight, Database, FileUp } from "lucide-react";
+import { AlertTriangle, ArrowRight, Database, FileUp } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { API_BASE_URL } from "@/lib/api";
+import { parseExtensionMismatch } from "@/lib/conversion-errors";
 
 type Conversion = {
   id: string;
@@ -43,6 +44,10 @@ export default function HomePage() {
       setLoading(false);
     }
   }
+
+  const mismatch = result?.error_message
+    ? parseExtensionMismatch(result.error_message)
+    : null;
 
   return (
     <main className="min-h-[calc(100vh-4rem)] overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.16),_transparent_35%)]">
@@ -91,7 +96,26 @@ export default function HomePage() {
               <div className="mt-5 rounded-xl border bg-background/70 p-4 text-sm">
                 <p className="font-medium">Task {result.id.slice(0, 8)} · {result.status}</p>
                 <p className="mt-1 text-muted-foreground">{result.source_format} → {result.target_format}</p>
-                {result.error_message && <p className="mt-2 text-red-300">{result.error_message}</p>}
+                {mismatch ? (
+                  <div className="mt-3 rounded-xl border border-amber-700/60 bg-amber-950/25 p-4" role="alert">
+                    <div className="flex items-center gap-2 font-medium text-amber-200">
+                      <AlertTriangle size={17} /> 文件类型不一致
+                    </div>
+                    <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                      <div>
+                        <dt className="text-muted-foreground">文件扩展名</dt>
+                        <dd className="mt-1 font-mono text-amber-100">.{mismatch.extension}</dd>
+                      </div>
+                      <div>
+                        <dt className="text-muted-foreground">检测到的真实类型</dt>
+                        <dd className="mt-1 font-mono text-amber-100">{mismatch.actualType}</dd>
+                      </div>
+                    </dl>
+                    <p className="mt-3 text-xs leading-5 text-amber-100/90">建议：{mismatch.suggestion}</p>
+                  </div>
+                ) : result.error_message ? (
+                  <p className="mt-2 text-red-300">{result.error_message}</p>
+                ) : null}
                 {result.status === "succeeded" && (
                   <a
                     className="mt-3 inline-block font-medium text-primary hover:underline"

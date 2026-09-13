@@ -2,7 +2,16 @@
 const nextConfig = {
   output: "standalone",
   reactStrictMode: true,
+  // 允许验收或并行开发时使用独立缓存目录，默认行为保持不变。
+  distDir: process.env.NEXT_DIST_DIR ?? ".next",
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${process.env.BACKEND_INTERNAL_URL ?? "http://127.0.0.1:8000"}/api/:path*`,
+      },
+    ];
+  },
 };
 
 export default nextConfig;
-

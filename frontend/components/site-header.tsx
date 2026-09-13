@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { DatabaseZap, Sparkles } from "lucide-react";
+import { Archive, DatabaseZap, Sparkles } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/", label: "Convert", icon: Sparkles },
   { href: "/badcases", label: "Badcases", icon: DatabaseZap },
+  { href: "/dataset", label: "Dataset", icon: Archive },
 ];
 
 export function SiteHeader() {

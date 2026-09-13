@@ -1,4 +1,6 @@
 import json
+import csv
+from io import StringIO
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,6 +89,52 @@ class BadCaseServiceTests(unittest.TestCase):
         self.assertEqual(stats.by_target_format, {"json": 2, "md": 1})
         self.assertEqual(stats.by_error_type["unknown"], 1)
         self.assertEqual(stats.by_date, {"2026-09-11": 2, "2026-09-10": 1})
+
+    def test_dataset_stats_include_latest_ten(self) -> None:
+        stats = self.service.get_dataset_stats()
+        self.assertEqual(stats.total, 3)
+        self.assertEqual(len(stats.latest_badcases), 3)
+        self.assertEqual(stats.latest_badcases[0].case_id, "case-3")
+        self.assertEqual(stats.latest_badcases[-1].case_id, "case-1")
+
+    def test_json_and_jsonl_exports_preserve_records(self) -> None:
+        json_records = json.loads(self.service.export_dataset("json").decode("utf-8"))
+        jsonl_records = [
+            json.loads(line)
+            for line in self.service.export_dataset("jsonl").decode("utf-8").splitlines()
+        ]
+        self.assertEqual(len(json_records), 3)
+        self.assertEqual(json_records, jsonl_records)
+        self.assertIn("error_type", json_records[0])
+
+    def test_csv_export_has_all_fields_and_utf8_content(self) -> None:
+        text = self.service.export_dataset("csv").decode("utf-8-sig")
+        records = list(csv.DictReader(StringIO(text)))
+        self.assertEqual(len(records), 3)
+        self.assertEqual(records[0]["case_id"], "case-3")
+        self.assertEqual(
+            set(records[0]),
+            {
+                "case_id",
+                "original_filename",
+                "source_format",
+                "target_format",
+                "file_size",
+                "error_message",
+                "error_type",
+                "captured_at",
+            },
+        )
+
+    def test_export_filters_are_combined(self) -> None:
+        content = self.service.export_dataset(
+            "json",
+            source_format="xyz",
+            target_format="md",
+            error_type="unknown",
+        )
+        records = json.loads(content.decode("utf-8"))
+        self.assertEqual([record["case_id"] for record in records], ["case-1"])
 
 
 if __name__ == "__main__":

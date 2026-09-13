@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.models  # noqa: F401 - register SQLAlchemy models / 注册数据模型
-from app.api.endpoints import badcases
+from app.api.endpoints import badcases, dataset
 from app.api.router import api_router
 from app.core.config import settings
 from app.db.database import Base, engine
@@ -36,6 +36,8 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api")
 # Badcase 浏览接口单独注册，便于后续独立演进数据集能力。
 app.include_router(badcases.router, prefix="/api/badcases", tags=["badcases"])
+# 数据集导出与概览接口保持独立，便于后续增加版本管理。
+app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 
 
 @app.get("/")

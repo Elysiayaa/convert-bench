@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchJson } from "@/lib/api";
 import { BadCase, formatBytes, formatDate } from "@/lib/badcases";
+import { parseExtensionMismatch } from "@/lib/conversion-errors";
 
 function DetailSkeleton() {
   return (
@@ -66,6 +67,10 @@ export default function BadCaseDetailPage() {
       setCopyError(copyError instanceof Error ? copyError.message : "复制失败，请手动复制");
     }
   }
+
+  const mismatch = item?.error_type === "extension_mismatch"
+    ? parseExtensionMismatch(item.error_message)
+    : null;
 
   return (
     <main className="min-h-[calc(100vh-4rem)] bg-[radial-gradient(circle_at_top_right,_rgba(244,63,94,0.1),_transparent_32%)]">
@@ -133,6 +138,12 @@ export default function BadCaseDetailPage() {
                 <dd className="mt-3 whitespace-pre-wrap break-words rounded-xl border bg-background p-4 font-mono text-sm leading-6 text-red-200">
                   {item.error_message}
                 </dd>
+                {mismatch && (
+                  <dd className="mt-3 rounded-xl border border-amber-700/60 bg-amber-950/25 p-4 text-sm text-amber-100">
+                    <p className="font-medium">检测结果：.{mismatch.extension} ≠ {mismatch.actualType}</p>
+                    <p className="mt-2 text-xs leading-5">解决建议：{mismatch.suggestion}</p>
+                  </dd>
+                )}
               </div>
             </dl>
           </Card>

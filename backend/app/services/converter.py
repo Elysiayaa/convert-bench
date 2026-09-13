@@ -8,6 +8,8 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.services.file_sniffer import formats_match, sniff_file_type
+
 if TYPE_CHECKING:
     from app.models.conversion_case import ConversionCase
 
@@ -28,6 +30,14 @@ class InvalidInputError(ConversionError):
     """输入文件损坏或内容与格式不匹配。"""
 
 
+class ExtensionMismatchError(InvalidInputError):
+    """文件扩展名与真实内容类型不一致。"""
+
+
+class UnknownFileTypeError(ConversionError):
+    """空文件或无法识别真实内容类型。"""
+
+
 class FileReadError(ConversionError):
     """输入文件读取失败。"""
 
@@ -40,6 +50,7 @@ ErrorType = Literal[
     "unsupported_format",
     "missing_dependency",
     "invalid_input",
+    "extension_mismatch",
     "converter_error",
     "file_read_error",
     "file_write_error",
@@ -56,8 +67,12 @@ def classify_error_type(error: BaseException | str | None) -> ErrorType:
         return "unsupported_format"
     if isinstance(error, MissingDependencyError):
         return "missing_dependency"
+    if isinstance(error, ExtensionMismatchError):
+        return "extension_mismatch"
     if isinstance(error, InvalidInputError):
         return "invalid_input"
+    if isinstance(error, UnknownFileTypeError):
+        return "unknown"
     if isinstance(error, FileReadError):
         return "file_read_error"
     if isinstance(error, FileWriteError):
@@ -68,6 +83,10 @@ def classify_error_type(error: BaseException | str | None) -> ErrorType:
         return "unknown"
 
     normalized = message.casefold()
+    if "extension mismatch" in normalized or (
+        "文件扩展名是" in normalized and "真实内容是" in normalized
+    ):
+        return "extension_mismatch"
     if "unsupported conversion" in normalized:
         return "unsupported_format"
     if any(
@@ -119,6 +138,8 @@ def classify_error_type(error: BaseException | str | None) -> ErrorType:
         )
     ):
         return "file_write_error"
+    if "empty file" in normalized or "无法识别文件真实类型" in normalized:
+        return "unknown"
     return "converter_error"
 
 
@@ -453,10 +474,27 @@ for converter_type in (
 
 
 def convert_file(source: Path, output_dir: Path, target_format: str) -> Path:
-    """通过注册表选择转换器，并返回生成的输出文件路径。"""
+    """先嗅探真实类型，再通过注册表选择转换器。"""
 
     source_format = normalize_format(source.suffix)
     target_format = normalize_format(target_format)
+    try:
+        if not source.is_file():
+            raise FileReadError(f"Input file does not exist / 输入文件不存在: {source}")
+        sniffed_format = sniff_file_type(source)
+    except FileReadError:
+        raise
+    except OSError as exc:
+        raise FileReadError(f"Failed to read input / 输入文件读取失败: {exc}") from exc
+
+    if sniffed_format == "unknown":
+        raise UnknownFileTypeError(
+            "无法识别文件真实类型：文件为空或内容不可识别，请检查文件后重试"
+        )
+    if not formats_match(source_format, sniffed_format):
+        raise ExtensionMismatchError(
+            f"文件扩展名是 .{source_format or 'unknown'}，但真实内容是 {sniffed_format}，请确认文件类型"
+        )
     if not target_format or not re.fullmatch(r"[a-z0-9]{1,16}", target_format):
         raise UnsupportedConversionError("Invalid target format / 目标格式不合法")
 

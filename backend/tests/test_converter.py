@@ -181,6 +181,7 @@ class ConverterExecutionTests(unittest.TestCase):
 class ErrorClassificationTests(unittest.TestCase):
     def test_every_error_type_is_recognized(self) -> None:
         cases = (
+            ("文件扩展名是 .xlsx，但真实内容是 markdown，请确认文件类型", "extension_mismatch"),
             ("Unsupported conversion: xyz -> md", "unsupported_format"),
             ("Pandoc is unavailable", "missing_dependency"),
             ("File is not a zip file", "invalid_input"),

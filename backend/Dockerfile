@@ -5,9 +5,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Pandoc 负责文档转换，XeLaTeX 与 Noto 字体负责生成支持中文的 PDF。
+# Pandoc 负责文档转换，XeLaTeX 与 Noto 字体负责生成支持中文的 PDF，libmagic 负责文件嗅探。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        libmagic1 \
         pandoc \
         texlive-xetex \
         texlive-lang-chinese \

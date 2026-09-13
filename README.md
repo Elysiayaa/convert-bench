@@ -29,7 +29,11 @@ The goal is not only to build another converter, but to build a system that beco
 > 🚧 Demo assets are coming soon / 演示素材即将补充。
 
 The current Web UI supports file upload, target-format selection, conversion status display, and result download.  
-当前 Web 界面已支持文件上传、目标格式选择、转换状态展示和结果下载。
+当前 Web 界面已支持文件上传、目标格式选择、转换状态展示、结果下载、Badcase 浏览与数据集导出。
+
+- Conversion workspace / 转换工作台：<http://localhost:3000>
+- Badcase browser / 失败案例浏览：<http://localhost:3000/badcases>
+- Dataset dashboard / 数据集看板：<http://localhost:3000/dataset>
 
 ```text
 [ Select file / 选择文件 ] → [ Choose format / 选择格式 ]
@@ -44,6 +48,9 @@ The current Web UI supports file upload, target-format selection, conversion sta
 
 - **End-to-end workflow / 完整链路** — upload, convert, query status, and download output.
 - **Failure-as-data / 失败即数据** — failed conversions are appended to a reusable JSONL dataset automatically.
+- **Badcase explorer / 失败案例浏览** — search, filter, paginate, inspect, and aggregate captured failures.
+- **Dataset export / 数据集导出** — filter and download datasets as JSON, CSV, or JSONL.
+- **Content-based sniffing / 内容嗅探** — detect PDF, Office ZIP containers, and structured text before selecting a converter.
 - **Converter registry / 转换器注册表** — pluggable `BaseConverter` implementations selected by source and target formats.
 - **Document and data converters / 文档与数据转换** — Markdown, Word, PDF, Excel, CSV, JSON, YAML, and subtitles.
 - **Persistent records / 任务持久化** — SQLAlchemy models backed by SQLite.
@@ -185,8 +192,8 @@ Copy-Item .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-For local `md → docx`, `docx → md`, and `md → pdf` conversion, install Pandoc separately. PDF output also requires XeLaTeX and a compatible CJK font. The Docker image installs these tools automatically and does not modify the host system.  
-本地运行上述文档转换时，还需自行安装 Pandoc；PDF 额外依赖 XeLaTeX 与兼容的中文字体。Docker 镜像会自动安装这些工具，不会修改宿主机环境。
+For local `md → docx`, `docx → md`, and `md → pdf` conversion, install Pandoc separately. PDF output also requires XeLaTeX and a compatible CJK font. File sniffing uses `python-magic-bin` on Windows and `python-magic` plus libmagic on Linux. The Docker image installs all system tools automatically and does not modify the host system.  
+本地运行上述文档转换时，还需自行安装 Pandoc；PDF 额外依赖 XeLaTeX 与兼容的中文字体。文件嗅探在 Windows 使用 `python-magic-bin`，在 Linux 使用 `python-magic` 与 libmagic。Docker 镜像会自动安装系统工具，不会修改宿主机环境。
 
 macOS or Linux:
 
@@ -225,6 +232,8 @@ Windows 环境请将 `cp` 替换为 `Copy-Item`。提交修改前建议运行类
 | `GET` | `/api/badcases` | Filter, sort, and paginate failure cases / 筛选、排序并分页查询失败案例 |
 | `GET` | `/api/badcases/stats` | Aggregate failure statistics / 查询失败案例统计 |
 | `GET` | `/api/badcases/{case_id}` | Get one failure case / 查询单条失败案例 |
+| `GET` | `/api/dataset/stats` | Get dataset statistics and the latest 10 badcases / 查询数据集统计与最新 10 条失败案例 |
+| `GET` | `/api/dataset/export` | Filter and export the dataset as JSON, CSV, or JSONL / 筛选并导出 JSON、CSV 或 JSONL 数据集 |
 
 Create a conversion / 创建转换任务：
 
@@ -262,7 +271,7 @@ backend/storage/datasets/conversion_failures.jsonl
 Example JSONL record / JSONL 样例（实际文件中每行一条）：
 
 ```json
-{"case_id":"aa3f1208-9b70-4f4d-b460-f5e94a43e51b","original_filename":"report.pdf","source_format":"pdf","target_format":"docx","file_size":48291,"error_message":"Unsupported conversion: pdf -> docx / 暂不支持该格式","captured_at":"2026-09-11T08:10:30.120000+00:00"}
+{"case_id":"aa3f1208-9b70-4f4d-b460-f5e94a43e51b","original_filename":"report.pdf","source_format":"pdf","target_format":"docx","file_size":48291,"error_message":"Unsupported conversion: pdf -> docx / 暂不支持该格式","error_type":"unsupported_format","captured_at":"2026-09-11T08:10:30.120000+00:00"}
 ```
 
 | Field / 字段 | Type / 类型 | Description / 说明 |
@@ -273,10 +282,22 @@ Example JSONL record / JSONL 样例（实际文件中每行一条）：
 | `target_format` | `string` | Requested target extension / 请求的目标扩展名 |
 | `file_size` | `integer` | Uploaded size in bytes / 上传大小，单位为字节 |
 | `error_message` | `string` | Exception or rejection reason / 转换异常或拒绝原因 |
+| `error_type` | `string` | Normalized category such as `extension_mismatch`; legacy records default to `unknown` / 标准化错误分类，例如 `extension_mismatch`，旧记录默认为 `unknown` |
 | `captured_at` | `string` | UTC ISO 8601 capture time / UTC ISO 8601 采集时间 |
 
 The dataset stores metadata and error context, not a duplicate of file contents. Source files remain under `storage/uploads/{case_id}`.  
 数据集只保存元数据与错误上下文，不重复写入文件内容；原始文件保留在 `storage/uploads/{case_id}` 中。
+
+Backfill historical error categories / 回填历史错误分类：
+
+```powershell
+cd backend
+python -m scripts.backfill_error_types --dry-run
+python -m scripts.backfill_error_types
+```
+
+The script inspects retained uploads when available, so legacy “not a zip file” records caused by renamed files can be upgraded to `extension_mismatch`. Invalid JSONL lines are preserved.  
+脚本会在原始上传文件仍存在时重新嗅探，因此可将改名文件导致的旧版 “not a zip file” 记录升级为 `extension_mismatch`；损坏的 JSONL 行会原样保留。
 
 ## Adding a converter / 添加转换器
 
@@ -315,8 +336,8 @@ For external engines, add the Python dependency to `backend/requirements.txt` or
 | Pandoc for document and markup formats / 文档与标记语言转换 | Human labeling workflow / 人工标注流程 |
 | ImageMagick for image pipelines / 图片转换链路 | Sensitive-data detection and redaction / 敏感数据识别与脱敏 |
 | FFmpeg for audio and video / 音视频转换 | Benchmark replay and regression evaluation / 基准回放与回归评测 |
-| Planner + tool registry for multi-step conversion / 多步转换规划 | Dataset versioning and export / 数据集版本管理与导出 |
-| File sniffing, limits, scanning, and job queues / 类型嗅探、限流、扫描与任务队列 | Quality scoring and failure taxonomy / 质量评分与失败分类 |
+| Planner + tool registry for multi-step conversion / 多步转换规划 | Dataset versioning, snapshots, and lineage / 数据集版本、快照与血缘管理 |
+| Upload limits, malware scanning, and job queues / 上传限流、恶意文件扫描与任务队列 | Quality scoring and failure taxonomy / 质量评分与失败分类 |
 | PostgreSQL and S3 production profile / PostgreSQL 与 S3 生产配置 | Governance and retention policies / 数据治理与保留策略 |
 
 ## Contributing / 如何贡献
