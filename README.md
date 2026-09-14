@@ -296,8 +296,20 @@ python -m scripts.backfill_error_types --dry-run
 python -m scripts.backfill_error_types
 ```
 
-The script inspects retained uploads when available, so legacy “not a zip file” records caused by renamed files can be upgraded to `extension_mismatch`. Invalid JSONL lines are preserved.  
-脚本会在原始上传文件仍存在时重新嗅探，因此可将改名文件导致的旧版 “not a zip file” 记录升级为 `extension_mismatch`；损坏的 JSONL 行会原样保留。
+The script fills missing or `unknown` categories from historical error messages while preserving existing classifications and invalid JSONL lines.  
+脚本会根据历史错误信息回填缺失或为 `unknown` 的分类，同时保留已有有效分类以及损坏的 JSONL 行。
+
+## Seed dataset / 种子数据集
+
+ConvertBench includes a public seed dataset at [`datasets/seed_badcases.jsonl`](./datasets/seed_badcases.jsonl). It contains the currently collected badcases and remains available even when runtime storage is cleared.  
+项目内置一份公开的种子数据集：[`datasets/seed_badcases.jsonl`](./datasets/seed_badcases.jsonl)。其中包含当前已收集的 badcase，即使运行时数据被清空，公开样本仍然存在。
+
+It can be used for / 可用于：
+
+- Converter evaluation / 评测转换器
+- Regression testing / 回归测试
+- Training data / 训练数据
+- Format-conversion failure research / 研究格式转换失败模式
 
 ## Adding a converter / 添加转换器
 
