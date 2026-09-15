@@ -62,6 +62,8 @@ class BadCaseServiceTests(unittest.TestCase):
         items = self.service.read_all()
         self.assertEqual(len(items), 3)
         self.assertEqual(items[0].error_type, "unknown")
+        self.assertEqual(items[0].severity, "error")
+        self.assertEqual(items[1].severity, "critical")
 
     def test_filters_and_keyword_are_combined(self) -> None:
         result = self.service.list_badcases(source_format="xyz", keyword="hello")
@@ -88,12 +90,14 @@ class BadCaseServiceTests(unittest.TestCase):
         self.assertEqual(stats.by_source_format, {"xyz": 2, "xlsx": 1})
         self.assertEqual(stats.by_target_format, {"json": 2, "md": 1})
         self.assertEqual(stats.by_error_type["unknown"], 1)
+        self.assertEqual(stats.by_severity, {"error": 2, "critical": 1})
         self.assertEqual(stats.by_date, {"2026-09-11": 2, "2026-09-10": 1})
 
     def test_dataset_stats_include_latest_ten(self) -> None:
         stats = self.service.get_dataset_stats()
         self.assertEqual(stats.total, 3)
         self.assertEqual(len(stats.latest_badcases), 3)
+        self.assertEqual(stats.by_severity, {"error": 2, "critical": 1})
         self.assertEqual(stats.latest_badcases[0].case_id, "case-3")
         self.assertEqual(stats.latest_badcases[-1].case_id, "case-1")
 
@@ -106,6 +110,7 @@ class BadCaseServiceTests(unittest.TestCase):
         self.assertEqual(len(json_records), 3)
         self.assertEqual(json_records, jsonl_records)
         self.assertIn("error_type", json_records[0])
+        self.assertIn("severity", json_records[0])
 
     def test_csv_export_has_all_fields_and_utf8_content(self) -> None:
         text = self.service.export_dataset("csv").decode("utf-8-sig")
@@ -122,6 +127,8 @@ class BadCaseServiceTests(unittest.TestCase):
                 "file_size",
                 "error_message",
                 "error_type",
+                "severity",
+                "image_dimensions",
                 "captured_at",
             },
         )

@@ -8,9 +8,10 @@ import { AlertTriangle, ArrowLeft, Check, Clipboard, FileWarning } from "lucide-
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SeverityBadge } from "@/components/severity-badge";
 import { fetchJson } from "@/lib/api";
 import { BadCase, formatBytes, formatDate } from "@/lib/badcases";
-import { parseExtensionMismatch } from "@/lib/conversion-errors";
+import { parseExtensionMismatch, parseImageError } from "@/lib/conversion-errors";
 
 function DetailSkeleton() {
   return (
@@ -71,6 +72,7 @@ export default function BadCaseDetailPage() {
   const mismatch = item?.error_type === "extension_mismatch"
     ? parseExtensionMismatch(item.error_message)
     : null;
+  const imageError = item?.error_message ? parseImageError(item.error_message) : null;
 
   return (
     <main className="min-h-[calc(100vh-4rem)] bg-[radial-gradient(circle_at_top_right,_rgba(244,63,94,0.1),_transparent_32%)]">
@@ -133,6 +135,21 @@ export default function BadCaseDetailPage() {
                   <dd className="mt-2 break-words font-mono text-sm">{value}</dd>
                 </div>
               ))}
+              <div className="min-w-0 bg-card p-5 sm:p-6">
+                <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Severity / 严重程度</dt>
+                <dd className="mt-2"><SeverityBadge severity={item.severity} /></dd>
+              </div>
+              {item.image_dimensions && (
+                <div className="min-w-0 bg-card p-5 sm:p-6">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Image dimensions / 图片尺寸</dt>
+                  <dd className="mt-2 font-mono text-sm">
+                    {item.image_dimensions.width} × {item.image_dimensions.height}
+                    <span className="ml-2 text-muted-foreground">
+                      ({item.image_dimensions.total_pixels.toLocaleString("zh-CN")} pixels)
+                    </span>
+                  </dd>
+                </div>
+              )}
               <div className="bg-card p-5 sm:col-span-2 sm:p-6">
                 <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Error message / 错误信息</dt>
                 <dd className="mt-3 whitespace-pre-wrap break-words rounded-xl border bg-background p-4 font-mono text-sm leading-6 text-red-200">
@@ -142,6 +159,12 @@ export default function BadCaseDetailPage() {
                   <dd className="mt-3 rounded-xl border border-amber-700/60 bg-amber-950/25 p-4 text-sm text-amber-100">
                     <p className="font-medium">检测结果：.{mismatch.extension} ≠ {mismatch.actualType}</p>
                     <p className="mt-2 text-xs leading-5">解决建议：{mismatch.suggestion}</p>
+                  </dd>
+                )}
+                {imageError && (
+                  <dd className="mt-3 rounded-xl border border-amber-700/60 bg-amber-950/25 p-4 text-sm text-amber-100">
+                    <p className="font-medium">{imageError.title}</p>
+                    <p className="mt-2 text-xs leading-5">{imageError.suggestion}</p>
                   </dd>
                 )}
               </div>

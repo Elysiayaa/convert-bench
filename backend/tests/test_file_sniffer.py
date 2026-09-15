@@ -7,10 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from openpyxl import Workbook
+from PIL import Image
 
 from app.services.badcase_service import BadCaseService
 from app.services.converter import (
     ExtensionMismatchError,
+    UnsupportedConversionError,
     UnknownFileTypeError,
     append_failure_dataset,
     classify_error_type,
@@ -50,6 +52,27 @@ class FileSnifferTests(unittest.TestCase):
             self.assertEqual(sniff_file_type(docx_path), "docx")
             self.assertEqual(sniff_file_type(zip_path), "zip")
             self.assertEqual(sniff_file_type(pdf_path), "pdf")
+
+    def test_image_file_headers_are_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for suffix, expected in (("png", "png"), ("jpg", "jpg"), ("gif", "gif"), ("bmp", "bmp"), ("webp", "webp")):
+                with self.subTest(expected=expected):
+                    path = root / f"image.{suffix}"
+                    Image.new("RGB", (2, 2), "green").save(path)
+                    self.assertEqual(sniff_file_type(path), expected)
+
+    def test_png_renamed_to_jpg_is_extension_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "renamed.jpg"
+            Image.new("RGB", (2, 2), "green").save(source, format="PNG")
+
+            with self.assertRaises(ExtensionMismatchError) as captured:
+                convert_file(source, root / "output", "png")
+
+            self.assertEqual(classify_error_type(captured.exception), "extension_mismatch")
+            self.assertIn("真实内容是 png", str(captured.exception))
 
     def test_structured_text_types_are_detected(self) -> None:
         samples = {
@@ -98,6 +121,18 @@ class FileSnifferTests(unittest.TestCase):
             self.assertIn("文件扩展名是 .xlsx", message)
             self.assertIn("真实内容是 markdown", message)
             self.assertEqual(classify_error_type(captured.exception), "extension_mismatch")
+
+    def test_unsupported_pair_takes_priority_over_extension_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "人格.txt"
+            source.write_text("# 人格\n\n这是 Markdown 内容。\n", encoding="utf-8")
+
+            with self.assertRaises(UnsupportedConversionError) as captured:
+                convert_file(source, root / "output", "png")
+
+            self.assertEqual(classify_error_type(captured.exception), "unsupported_format")
+            self.assertIn("Unsupported conversion: txt -> png", str(captured.exception))
 
     def test_empty_file_is_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

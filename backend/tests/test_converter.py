@@ -6,22 +6,38 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from PIL import Image
+
+from app.services.badcase_service import BadCaseService
+
 from app.services.converter import (
     BaseConverter,
+    BmpToPngConverter,
     CSVToJSONConverter,
     ConverterRegistry,
     ExcelToJSONConverter,
+    GifToPngConverter,
+    ImageDecodeError,
+    ImageEncodeError,
+    ImageLossyWarning,
+    InvalidInputError,
+    JpgToPngConverter,
+    JpgToWebpConverter,
     JSONToYAMLConverter,
     MarkdownToPDFConverter,
     MarkdownToWordConverter,
+    PngToJpgConverter,
+    PngToWebpConverter,
     SRTToVTTConverter,
     UnsupportedConversionError,
     WordToMarkdownConverter,
+    WebpToPngConverter,
     YAMLToJSONConverter,
     append_failure_dataset,
     classify_error_type,
     convert_file,
     converter_registry,
+    get_conversion_warning,
 )
 
 
@@ -36,6 +52,13 @@ class ConverterRegistryTests(unittest.TestCase):
             ("json", "yaml"),
             ("yaml", "json"),
             ("srt", "vtt"),
+            ("png", "jpg"),
+            ("jpg", "png"),
+            ("png", "webp"),
+            ("webp", "png"),
+            ("jpg", "webp"),
+            ("bmp", "png"),
+            ("gif", "png"),
         }
         self.assertTrue(expected.issubset(set(converter_registry.supported_pairs)))
 
@@ -66,6 +89,165 @@ class ConverterRegistryTests(unittest.TestCase):
 
 
 class ConverterExecutionTests(unittest.TestCase):
+    def test_every_image_converter_creates_expected_format(self) -> None:
+        converter_cases = (
+            (PngToJpgConverter(), "png", "jpg", "JPEG"),
+            (JpgToPngConverter(), "jpg", "png", "PNG"),
+            (PngToWebpConverter(), "png", "webp", "WEBP"),
+            (WebpToPngConverter(), "webp", "png", "PNG"),
+            (JpgToWebpConverter(), "jpg", "webp", "WEBP"),
+            (BmpToPngConverter(), "bmp", "png", "PNG"),
+            (GifToPngConverter(), "gif", "png", "PNG"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, (converter, source_suffix, target_suffix, expected_format) in enumerate(converter_cases):
+                with self.subTest(converter=type(converter).__name__):
+                    source = root / f"source-{index}.{source_suffix}"
+                    output = root / f"output-{index}.{target_suffix}"
+                    mode = "RGBA" if source_suffix == "png" else "RGB"
+                    color = (20, 40, 60, 255) if mode == "RGBA" else (20, 40, 60)
+                    Image.new(mode, (4, 3), color).save(source)
+
+                    converter.convert(source, output)
+
+                    with Image.open(output) as converted:
+                        self.assertEqual(converted.format, expected_format)
+                        self.assertEqual(converted.size, (4, 3))
+
+    def test_gif_to_png_uses_only_first_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "animated.gif"
+            output = root / "first-frame.png"
+            first = Image.new("RGB", (2, 2), "red")
+            second = Image.new("RGB", (2, 2), "blue")
+            first.save(source, save_all=True, append_images=[second], duration=100, loop=0)
+
+            GifToPngConverter().convert(source, output)
+
+            with Image.open(output) as converted:
+                self.assertEqual(getattr(converted, "n_frames", 1), 1)
+                self.assertEqual(converted.convert("RGB").getpixel((0, 0)), (255, 0, 0))
+            warning = get_conversion_warning("gif", "png")
+            self.assertIsInstance(warning, ImageLossyWarning)
+            self.assertIn("只保留第一帧", str(warning))
+
+    def test_transparent_png_to_jpg_is_filled_with_white(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "transparent.png"
+            output = root / "result.jpg"
+            image = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+            for x in range(8, 16):
+                for y in range(16):
+                    image.putpixel((x, y), (255, 0, 0, 255))
+            image.save(source)
+
+            PngToJpgConverter().convert(source, output)
+
+            with Image.open(output) as converted:
+                red, green, blue = converted.convert("RGB").getpixel((2, 8))
+                self.assertGreater(red, 240)
+                self.assertGreater(green, 240)
+                self.assertGreater(blue, 240)
+
+    def test_corrupted_png_is_reported_as_image_decode_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "broken.png"
+            source.write_bytes(b"\x89PNG\r\n\x1a\ncorrupted")
+
+            with self.assertRaises(ImageDecodeError) as captured:
+                convert_file(source, root / "outputs", "jpg")
+            self.assertEqual(classify_error_type(captured.exception), "image_decode_error")
+
+    def test_oversized_image_is_rejected_before_pixel_decode(self) -> None:
+        class HeaderOnlyImage:
+            size = (13_619, 10_000)
+
+            def __enter__(self) -> "HeaderOnlyImage":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def load(self) -> None:
+                raise AssertionError("超大图片不应进入像素解码")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "oversized.png"
+            source.write_bytes(b"header")
+            output = root / "result.jpg"
+
+            with patch("PIL.Image.open", return_value=HeaderOnlyImage()):
+                with self.assertRaises(InvalidInputError) as captured:
+                    PngToJpgConverter().convert(source, output)
+
+            error = captured.exception
+            self.assertEqual(classify_error_type(error), "invalid_input")
+            self.assertEqual(
+                str(error),
+                "图片尺寸过大（136190000 像素），超过限制（50000000 像素），已拒绝转换",
+            )
+            self.assertEqual(error.image_dimensions["width"], 13_619)  # type: ignore[attr-defined]
+
+            case = SimpleNamespace(
+                id="oversized-case",
+                original_filename="oversized.png",
+                source_format="png",
+                target_format="jpg",
+                file_size=6,
+                error_message=str(error),
+            )
+            append_failure_dataset(case, root / "dataset", error=error)
+            item = BadCaseService(root / "dataset" / "conversion_failures.jsonl").read_all()[0]
+            self.assertEqual(item.severity, "error")
+            self.assertEqual(item.image_dimensions.total_pixels, 136_190_000)
+
+    def test_decompression_bomb_error_becomes_invalid_input(self) -> None:
+        pillow_error = Image.DecompressionBombError(
+            "Image size (136190920 pixels) exceeds limit of 100000000 pixels"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "bomb.png"
+            source.write_bytes(b"header")
+
+            with patch("PIL.Image.open", side_effect=pillow_error):
+                with self.assertRaises(InvalidInputError) as captured:
+                    PngToJpgConverter().convert(source, root / "result.jpg")
+
+            self.assertEqual(classify_error_type(captured.exception), "invalid_input")
+            self.assertEqual(
+                str(captured.exception),
+                "图片尺寸过大（136190920 像素），超过限制（50000000 像素），已拒绝转换",
+            )
+
+    def test_image_larger_than_50_mb_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "huge.png"
+            with source.open("wb") as image_file:
+                image_file.seek(50 * 1024 * 1024)
+                image_file.write(b"x")
+
+            with self.assertRaises(InvalidInputError) as captured:
+                convert_file(source, root / "outputs", "jpg")
+            self.assertEqual(classify_error_type(captured.exception), "invalid_input")
+
+    def test_jpeg_extension_uses_jpg_converter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "photo.jpeg"
+            Image.new("RGB", (2, 2), "green").save(source)
+
+            output = convert_file(source, root / "outputs", "png")
+
+            with Image.open(output) as converted:
+                self.assertEqual(converted.format, "PNG")
+
     def test_existing_text_conversion_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -187,6 +369,9 @@ class ErrorClassificationTests(unittest.TestCase):
             ("File is not a zip file", "invalid_input"),
             ("Failed to read input: permission denied", "file_read_error"),
             ("Failed to write output: read-only file system", "file_write_error"),
+            (ImageDecodeError("图片无法解码"), "image_decode_error"),
+            (ImageEncodeError("图片编码失败"), "image_encode_error"),
+            (ImageLossyWarning("有损转换"), "image_lossy_warning"),
             (RuntimeError("unexpected converter failure"), "converter_error"),
             (None, "unknown"),
         )
@@ -215,6 +400,8 @@ class ErrorClassificationTests(unittest.TestCase):
             )
 
         self.assertEqual(record["error_type"], "unsupported_format")
+        self.assertEqual(record["severity"], "error")
+        self.assertIsNone(record["image_dimensions"])
         self.assertEqual(record["case_id"], case.id)
         self.assertEqual(record["original_filename"], case.original_filename)
         self.assertEqual(record["source_format"], case.source_format)
@@ -222,6 +409,26 @@ class ErrorClassificationTests(unittest.TestCase):
         self.assertEqual(record["file_size"], case.file_size)
         self.assertEqual(record["error_message"], case.error_message)
         self.assertIn("captured_at", record)
+
+    def test_image_warning_is_visible_in_badcase_stats(self) -> None:
+        case = SimpleNamespace(
+            id="gif-warning",
+            original_filename="animated.gif",
+            source_format="gif",
+            target_format="png",
+            file_size=128,
+            error_message=None,
+        )
+        warning = get_conversion_warning("gif", "png")
+        self.assertIsNotNone(warning)
+        with tempfile.TemporaryDirectory() as directory:
+            dataset_dir = Path(directory)
+            append_failure_dataset(case, dataset_dir, error=warning, message=str(warning))
+            service = BadCaseService(dataset_dir / "conversion_failures.jsonl")
+
+            self.assertEqual(service.get_stats().by_error_type, {"image_lossy_warning": 1})
+            self.assertEqual(service.get_stats().by_severity, {"warning": 1})
+            self.assertIn("只保留第一帧", service.read_all()[0].error_message)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ class ErrorTypeInferenceTests(unittest.TestCase):
             ("Unsupported conversion: xyz -> md", "unsupported_format"),
             ("Pandoc is unavailable; install it first", "missing_dependency"),
             ("xlsx -> json failed: File is not a zip file", "invalid_input"),
+            ("Image decode error / 图片无法解码", "image_decode_error"),
+            ("Image encode error / 图片编码失败", "image_encode_error"),
+            ("Image lossy warning / GIF 只保留第一帧", "image_lossy_warning"),
             (
                 "文件扩展名是 .xlsx，但真实内容是 markdown，请确认文件类型",
                 "extension_mismatch",
@@ -52,6 +55,7 @@ class BackfillFileTests(unittest.TestCase):
             self.assertEqual(stats.backfilled, 1)
             self.assertEqual(stats.before_by_error_type, {"unknown": 1})
             self.assertEqual(stats.after_by_error_type, {"unsupported_format": 1})
+            self.assertEqual(stats.severity_backfilled, 1)
 
     def test_update_preserves_valid_type_and_field_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -82,9 +86,12 @@ class BackfillFileTests(unittest.TestCase):
 
             self.assertEqual(updated_records[0]["error_type"], "missing_dependency")
             self.assertEqual(updated_records[1]["error_type"], "converter_error")
-            self.assertEqual(list(updated_records[0]), list(records[0]))
-            self.assertEqual(list(updated_records[1]), list(records[1]))
+            self.assertEqual(updated_records[0]["severity"], "critical")
+            self.assertEqual(updated_records[1]["severity"], "critical")
+            self.assertEqual(list(updated_records[0])[:-1], list(records[0]))
+            self.assertEqual(list(updated_records[1])[:-1], list(records[1]))
             self.assertEqual(stats.backfilled, 1)
+            self.assertEqual(stats.severity_backfilled, 2)
 
     def test_unknown_stays_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -99,9 +106,27 @@ class BackfillFileTests(unittest.TestCase):
             stats = backfill_error_types(file_path)
             updated = json.loads(file_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(updated, original)
+            self.assertEqual(updated, {**original, "severity": "error"})
             self.assertEqual(stats.backfilled, 0)
+            self.assertEqual(stats.severity_backfilled, 1)
             self.assertEqual(stats.unknown, 1)
+
+    def test_existing_incorrect_severity_is_repaired(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            file_path = Path(directory) / "failures.jsonl"
+            record = {
+                "case_id": "case-warning",
+                "error_message": "Image lossy warning / 有损转换",
+                "error_type": "image_lossy_warning",
+                "severity": "critical",
+            }
+            file_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+            stats = backfill_error_types(file_path)
+            updated = json.loads(file_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(updated["severity"], "warning")
+            self.assertEqual(stats.severity_backfilled, 1)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.services.error_severity import severity_for_error_type
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_PATH = BACKEND_ROOT / "storage" / "datasets" / "conversion_failures.jsonl"
@@ -21,6 +23,7 @@ class BackfillStats:
     before_by_error_type: dict[str, int]
     after_by_error_type: dict[str, int]
     backfilled: int
+    severity_backfilled: int
     unknown: int
     invalid_lines: int
 
@@ -29,6 +32,12 @@ def infer_error_type(error_message: str, current_error_type: str | None = None) 
     """严格按照指定优先级从错误信息中推断类型。"""
 
     message = error_message.casefold()
+    if "image decode error" in message or "图片无法解码" in message:
+        return "image_decode_error"
+    if "image encode error" in message or "图片编码失败" in message:
+        return "image_encode_error"
+    if "image lossy warning" in message or "有损转换" in message or "只保留第一帧" in message:
+        return "image_lossy_warning"
     if "unsupported conversion" in message:
         return "unsupported_format"
     if "pandoc is unavailable" in message:
@@ -48,6 +57,7 @@ def backfill_error_types(file_path: Path, *, dry_run: bool = False) -> BackfillS
     output_lines: list[str] = []
     total = 0
     backfilled = 0
+    severity_backfilled = 0
     invalid_lines = 0
 
     with file_path.open("r", encoding="utf-8", newline="") as source:
@@ -86,6 +96,12 @@ def backfill_error_types(file_path: Path, *, dry_run: bool = False) -> BackfillS
                     payload["error_type"] = final_type
                     backfilled += 1
 
+            expected_severity = severity_for_error_type(final_type)
+            if payload.get("severity") != expected_severity:
+                # severity 始终由最终 error_type 推导，修正缺失值和历史错误值。
+                payload["severity"] = expected_severity
+                severity_backfilled += 1
+
             after_counts[final_type] += 1
             output_lines.append(json.dumps(payload, ensure_ascii=False) + line_ending)
 
@@ -94,6 +110,7 @@ def backfill_error_types(file_path: Path, *, dry_run: bool = False) -> BackfillS
         before_by_error_type=_sorted_counts(before_counts),
         after_by_error_type=_sorted_counts(after_counts),
         backfilled=backfilled,
+        severity_backfilled=severity_backfilled,
         unknown=after_counts["unknown"],
         invalid_lines=invalid_lines,
     )
@@ -136,6 +153,7 @@ def print_stats(stats: BackfillStats, *, dry_run: bool) -> None:
     for error_type, count in stats.after_by_error_type.items():
         print(f"  {error_type}: {count}")
     print(f"被回填：{stats.backfilled} 条")
+    print(f"severity 被回填：{stats.severity_backfilled} 条")
     print(f"仍为 unknown：{stats.unknown} 条")
     if stats.invalid_lines:
         print(f"跳过无效 JSONL：{stats.invalid_lines} 行")

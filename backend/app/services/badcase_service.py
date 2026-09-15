@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from app.schemas.badcase import BadCase, BadCaseListResponse, BadCaseStats
 from app.schemas.dataset import DatasetStats
+from app.services.error_severity import severity_for_error_type
 
 SortField = Literal["captured_at", "file_size"]
 SortOrder = Literal["asc", "desc"]
@@ -36,6 +37,9 @@ class BadCaseService:
                         if not isinstance(payload, dict):
                             continue
                         payload.setdefault("error_type", "unknown")
+                        if payload.get("severity") not in {"warning", "error", "critical"}:
+                            # 历史记录缺少 severity 时按 error_type 动态补齐。
+                            payload["severity"] = severity_for_error_type(payload["error_type"])
                         items.append(BadCase.model_validate(payload))
                     except (json.JSONDecodeError, ValidationError, TypeError):
                         # 单行损坏不能影响其他有效记录。
@@ -113,6 +117,7 @@ class BadCaseService:
             by_source_format=self._sorted_counts(item.source_format for item in items),
             by_target_format=self._sorted_counts(item.target_format for item in items),
             by_error_type=self._sorted_counts(item.error_type for item in items),
+            by_severity=self._sorted_counts(item.severity for item in items),
             by_date=self._sorted_counts(item.captured_at.date().isoformat() for item in items),
         )
 
@@ -126,6 +131,7 @@ class BadCaseService:
             by_source_format=self._sorted_counts(item.source_format for item in items),
             by_target_format=self._sorted_counts(item.target_format for item in items),
             by_error_type=self._sorted_counts(item.error_type for item in items),
+            by_severity=self._sorted_counts(item.severity for item in items),
             by_date=self._sorted_counts(item.captured_at.date().isoformat() for item in items),
             latest_badcases=latest,
         )
@@ -162,6 +168,8 @@ class BadCaseService:
             "file_size",
             "error_message",
             "error_type",
+            "severity",
+            "image_dimensions",
             "captured_at",
         ]
         output = StringIO(newline="")

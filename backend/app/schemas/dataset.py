@@ -10,5 +10,6 @@ class DatasetStats(BaseModel):
     by_source_format: dict[str, int]
     by_target_format: dict[str, int]
     by_error_type: dict[str, int]
+    by_severity: dict[str, int]
     by_date: dict[str, int]
     latest_badcases: list[BadCase]

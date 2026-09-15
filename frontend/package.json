@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --no-warnings --test --experimental-strip-types tests/api.test.mjs"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.1.0",

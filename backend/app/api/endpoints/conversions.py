@@ -11,7 +11,12 @@ from app.core.config import settings
 from app.db.database import get_db
 from app.models.conversion_case import ConversionCase
 from app.schemas.conversion import ConversionRead
-from app.services.converter import append_failure_dataset, convert_file, normalize_format
+from app.services.converter import (
+    append_failure_dataset,
+    convert_file,
+    get_conversion_warning,
+    normalize_format,
+)
 
 router = APIRouter()
 
@@ -53,6 +58,15 @@ async def create_conversion(
         output_path = convert_file(input_path, output_dir, target_format)
         case.status = "succeeded"
         case.output_path = str(output_path)
+        warning = get_conversion_warning(case.source_format, case.target_format)
+        if warning is not None:
+            # 警告进入 badcase 数据集，但不影响转换成功状态和结果下载。
+            append_failure_dataset(
+                case,
+                settings.storage_root / "datasets",
+                error=warning,
+                message=str(warning),
+            )
     except Exception as exc:  # 统一沉淀转换失败及其错误分类
         case.status = "failed"
         case.error_message = str(exc)

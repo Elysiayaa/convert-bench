@@ -1,6 +1,7 @@
 import json
 import re
 import shutil
+import warnings
 from abc import ABC, abstractmethod
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
@@ -9,6 +10,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.services.file_sniffer import formats_match, sniff_file_type
+from app.services.error_severity import severity_for_error_type
 
 if TYPE_CHECKING:
     from app.models.conversion_case import ConversionCase
@@ -46,6 +48,22 @@ class FileWriteError(ConversionError):
     """输出文件写入失败。"""
 
 
+class ImageDecodeError(InvalidInputError):
+    """图片损坏或无法由 Pillow 解码。"""
+
+
+class ImageEncodeError(ConversionError):
+    """图片无法编码为目标格式。"""
+
+
+class ImageLossyWarning(RuntimeWarning):
+    """图片转换成功，但发生了有损处理。"""
+
+
+MAX_IMAGE_PIXELS = 50_000_000
+HARD_MAX_IMAGE_PIXELS = 100_000_000
+
+
 ErrorType = Literal[
     "unsupported_format",
     "missing_dependency",
@@ -54,6 +72,9 @@ ErrorType = Literal[
     "converter_error",
     "file_read_error",
     "file_write_error",
+    "image_decode_error",
+    "image_encode_error",
+    "image_lossy_warning",
     "unknown",
 ]
 
@@ -69,6 +90,12 @@ def classify_error_type(error: BaseException | str | None) -> ErrorType:
         return "missing_dependency"
     if isinstance(error, ExtensionMismatchError):
         return "extension_mismatch"
+    if isinstance(error, ImageDecodeError):
+        return "image_decode_error"
+    if isinstance(error, ImageEncodeError):
+        return "image_encode_error"
+    if isinstance(error, ImageLossyWarning):
+        return "image_lossy_warning"
     if isinstance(error, InvalidInputError):
         return "invalid_input"
     if isinstance(error, UnknownFileTypeError):
@@ -83,6 +110,12 @@ def classify_error_type(error: BaseException | str | None) -> ErrorType:
         return "unknown"
 
     normalized = message.casefold()
+    if "image decode error" in normalized or "图片无法解码" in normalized:
+        return "image_decode_error"
+    if "image encode error" in normalized or "图片编码失败" in normalized:
+        return "image_encode_error"
+    if "image lossy warning" in normalized or "有损转换" in normalized or "只保留第一帧" in normalized:
+        return "image_lossy_warning"
     if "extension mismatch" in normalized or (
         "文件扩展名是" in normalized and "真实内容是" in normalized
     ):
@@ -400,6 +433,163 @@ class MarkdownToTextConverter(BaseConverter):
         self._run_safely(input_path, output_path, action)
 
 
+class PillowImageConverter(BaseConverter):
+    """基于 Pillow 的图片转换公共实现。"""
+
+    pillow_target_format: str
+
+    def _prepare_image(self, image: Any) -> Any:
+        """按目标格式调整色彩模式，子类可覆盖。"""
+
+        return image.copy()
+
+    def convert(self, input_path: Path, output_path: Path) -> None:
+        def action() -> None:
+            try:
+                from PIL import Image, UnidentifiedImageError
+            except ImportError as exc:
+                raise MissingDependencyError("Pillow is not installed / 未安装 Pillow") from exc
+
+            dimensions: dict[str, int] | None = None
+            try:
+                # 这里只解析文件头；忽略 Pillow 警告后由项目自己的更严格阈值统一判断。
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+                    opened_image = Image.open(input_path)
+                with opened_image:
+                    width, height = opened_image.size
+                    total_pixels = width * height
+                    dimensions = {
+                        "width": width,
+                        "height": height,
+                        "total_pixels": total_pixels,
+                    }
+                    if total_pixels > HARD_MAX_IMAGE_PIXELS:
+                        # 硬限制图片绝不进入像素解码阶段。
+                        raise _image_size_error(width, height)
+                    if total_pixels > MAX_IMAGE_PIXELS:
+                        raise _image_size_error(width, height)
+
+                    # load 会立即校验像素数据，避免损坏图片延迟到保存阶段才报错。
+                    opened_image.seek(0)
+                    opened_image.load()
+                    image = self._prepare_image(opened_image)
+            except Image.DecompressionBombError as exc:
+                pixels = _pixels_from_decompression_bomb(exc)
+                message = (
+                    f"图片尺寸过大（{pixels} 像素），超过限制（{MAX_IMAGE_PIXELS} 像素），已拒绝转换"
+                    if pixels is not None
+                    else f"图片尺寸过大，超过限制（{MAX_IMAGE_PIXELS} 像素），已拒绝转换"
+                )
+                error = InvalidInputError(message)
+                _attach_image_dimensions(error, dimensions)
+                raise error from exc
+            except InvalidInputError:
+                raise
+            except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+                error = ImageDecodeError(
+                    f"Image decode error / 图片无法解码，文件可能已损坏: {exc}"
+                )
+                _attach_image_dimensions(error, dimensions)
+                raise error from exc
+
+            try:
+                with image:
+                    image.save(output_path, format=self.pillow_target_format)
+            except (OSError, KeyError, TypeError, ValueError) as exc:
+                error = ImageEncodeError(
+                    f"Image encode error / 图片编码失败，目标格式可能不支持当前图片特性: {exc}"
+                )
+                _attach_image_dimensions(error, dimensions)
+                raise error from exc
+
+        self._run_safely(input_path, output_path, action)
+
+
+def _image_size_error(width: int, height: int) -> InvalidInputError:
+    """构造包含尺寸元数据的友好输入错误。"""
+
+    total_pixels = width * height
+    error = InvalidInputError(
+        f"图片尺寸过大（{total_pixels} 像素），超过限制（{MAX_IMAGE_PIXELS} 像素），已拒绝转换"
+    )
+    _attach_image_dimensions(
+        error,
+        {"width": width, "height": height, "total_pixels": total_pixels},
+    )
+    return error
+
+
+def _attach_image_dimensions(
+    error: BaseException,
+    dimensions: dict[str, int] | None,
+) -> None:
+    """把已知图片尺寸附加到异常，供 badcase 写入逻辑读取。"""
+
+    if dimensions is not None:
+        error.image_dimensions = dimensions  # type: ignore[attr-defined]
+
+
+def _pixels_from_decompression_bomb(error: BaseException) -> int | None:
+    """从 Pillow 异常文本中提取像素数，无法提取时返回空值。"""
+
+    match = re.search(r"Image size \((\d+) pixels\)", str(error), flags=re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+class PngToJpgConverter(PillowImageConverter):
+    source_format = "png"
+    target_format = "jpg"
+    pillow_target_format = "JPEG"
+
+    def _prepare_image(self, image: Any) -> Any:
+        # JPEG 不支持透明通道，统一叠加到白色背景上。
+        if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+            from PIL import Image
+
+            rgba = image.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, "white")
+            background.alpha_composite(rgba)
+            return background.convert("RGB")
+        return image.convert("RGB")
+
+
+class JpgToPngConverter(PillowImageConverter):
+    source_format = "jpg"
+    target_format = "png"
+    pillow_target_format = "PNG"
+
+
+class PngToWebpConverter(PillowImageConverter):
+    source_format = "png"
+    target_format = "webp"
+    pillow_target_format = "WEBP"
+
+
+class WebpToPngConverter(PillowImageConverter):
+    source_format = "webp"
+    target_format = "png"
+    pillow_target_format = "PNG"
+
+
+class JpgToWebpConverter(PillowImageConverter):
+    source_format = "jpg"
+    target_format = "webp"
+    pillow_target_format = "WEBP"
+
+
+class BmpToPngConverter(PillowImageConverter):
+    source_format = "bmp"
+    target_format = "png"
+    pillow_target_format = "PNG"
+
+
+class GifToPngConverter(PillowImageConverter):
+    source_format = "gif"
+    target_format = "png"
+    pillow_target_format = "PNG"
+
+
 class SameFormatConverter(BaseConverter):
     """同扩展名转换时保留原文件内容。"""
 
@@ -444,7 +634,8 @@ class ConverterRegistry:
 
 
 def normalize_format(value: str) -> str:
-    return value.strip().lower().lstrip(".")
+    normalized = value.strip().lower().lstrip(".")
+    return {"jpeg": "jpg", "jpe": "jpg"}.get(normalized, normalized)
 
 
 def _json_default(value: Any) -> str | float:
@@ -469,18 +660,32 @@ for converter_type in (
     SRTToVTTConverter,
     TextToMarkdownConverter,
     MarkdownToTextConverter,
+    PngToJpgConverter,
+    JpgToPngConverter,
+    PngToWebpConverter,
+    WebpToPngConverter,
+    JpgToWebpConverter,
+    BmpToPngConverter,
+    GifToPngConverter,
 ):
     converter_registry.register(converter_type())
 
 
 def convert_file(source: Path, output_dir: Path, target_format: str) -> Path:
-    """先嗅探真实类型，再通过注册表选择转换器。"""
+    """先确认转换组合受支持，再嗅探并校验输入文件。"""
 
     source_format = normalize_format(source.suffix)
     target_format = normalize_format(target_format)
+    if not target_format or not re.fullmatch(r"[a-z0-9]{1,16}", target_format):
+        raise UnsupportedConversionError("Invalid target format / 目标格式不合法")
+
+    # 转换能力与文件内容无关，应优先返回最根本的不支持错误。
+    converter = converter_registry.get(source_format, target_format)
     try:
         if not source.is_file():
             raise FileReadError(f"Input file does not exist / 输入文件不存在: {source}")
+        if source_format in {"png", "jpg", "jpeg", "gif", "bmp", "webp"} and source.stat().st_size > 50 * 1024 * 1024:
+            raise InvalidInputError("Invalid input / 输入图片超过 50MB，拒绝转换")
         sniffed_format = sniff_file_type(source)
     except FileReadError:
         raise
@@ -495,31 +700,43 @@ def convert_file(source: Path, output_dir: Path, target_format: str) -> Path:
         raise ExtensionMismatchError(
             f"文件扩展名是 .{source_format or 'unknown'}，但真实内容是 {sniffed_format}，请确认文件类型"
         )
-    if not target_format or not re.fullmatch(r"[a-z0-9]{1,16}", target_format):
-        raise UnsupportedConversionError("Invalid target format / 目标格式不合法")
 
     output_path = output_dir / f"{source.stem}.{target_format}"
-    converter = converter_registry.get(source_format, target_format)
     converter.convert(source, output_path)
     return output_path
+
+
+def get_conversion_warning(source_format: str, target_format: str) -> ImageLossyWarning | None:
+    """返回成功转换需要沉淀的图片质量警告。"""
+
+    pair = (normalize_format(source_format), normalize_format(target_format))
+    if pair == ("gif", "png"):
+        return ImageLossyWarning("Image lossy warning / GIF 转 PNG 只保留第一帧")
+    if pair in {("png", "jpg"), ("png", "webp"), ("jpg", "webp")}:
+        return ImageLossyWarning("Image lossy warning / 图片经过有损转换，质量可能下降")
+    return None
 
 
 def append_failure_dataset(
     case: "ConversionCase",
     dataset_dir: Path,
     error: BaseException | str | None = None,
+    message: str | None = None,
 ) -> None:
-    """追加一条可回放的失败样本。"""
+    """追加一条可回放的失败或警告样本。"""
 
     dataset_dir.mkdir(parents=True, exist_ok=True)
+    error_type = classify_error_type(error if error is not None else case.error_message)
     record = {
         "case_id": case.id,
         "original_filename": case.original_filename,
         "source_format": case.source_format,
         "target_format": case.target_format,
         "file_size": case.file_size,
-        "error_message": case.error_message,
-        "error_type": classify_error_type(error if error is not None else case.error_message),
+        "error_message": message if message is not None else case.error_message,
+        "error_type": error_type,
+        "severity": severity_for_error_type(error_type),
+        "image_dimensions": getattr(error, "image_dimensions", None),
         "captured_at": datetime.now(timezone.utc).isoformat(),
     }
     with (dataset_dir / "conversion_failures.jsonl").open("a", encoding="utf-8") as file:

@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SeverityBadge } from "@/components/severity-badge";
 import { fetchDownload, fetchJson } from "@/lib/api";
 import { DatasetStats, formatBytes, formatDate } from "@/lib/badcases";
 
@@ -61,8 +62,8 @@ function StatsCard({
 function DatasetSkeleton() {
   return (
     <>
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }, (_, index) => (
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        {Array.from({ length: 5 }, (_, index) => (
           <Skeleton key={index} className="h-32 rounded-2xl" />
         ))}
       </section>
@@ -176,11 +177,12 @@ export default function DatasetPage() {
           <Card className="p-12 text-center">暂无数据</Card>
         ) : (
           <>
-            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <StatsCard title="Total badcases / 总数" value={stats.total} />
               <StatsCard title="Source formats / 源格式 Top 5" entries={topEntries(stats.by_source_format)} />
               <StatsCard title="Target formats / 目标格式 Top 5" entries={topEntries(stats.by_target_format)} />
               <StatsCard title="Error types / 错误类型 Top 5" entries={topEntries(stats.by_error_type)} />
+              <StatsCard title="Severity / 严重程度" entries={topEntries(stats.by_severity)} />
             </section>
 
             <Card className="mt-8 bg-card/80 p-5 sm:p-6">
@@ -279,7 +281,10 @@ export default function DatasetPage() {
                               <time className="shrink-0 text-xs text-muted-foreground">{formatDate(item.captured_at)}</time>
                             </div>
                             <p className="mt-2 line-clamp-1 break-words text-sm text-muted-foreground">{item.error_message}</p>
-                            <p className="mt-2 text-xs text-muted-foreground">{item.error_type} · {formatBytes(item.file_size)}</p>
+                            <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                              <SeverityBadge severity={item.severity} />
+                              <span>{item.error_type} · {formatBytes(item.file_size)}</span>
+                            </div>
                           </div>
                         </div>
                       </Card>

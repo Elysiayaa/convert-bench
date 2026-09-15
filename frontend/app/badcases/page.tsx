@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SeverityBadge } from "@/components/severity-badge";
 import { fetchJson } from "@/lib/api";
 import {
   BadCaseListResponse,
@@ -186,14 +187,15 @@ export default function BadCasesPage() {
             统计数据加载失败：{statsError}
           </Card>
         ) : stats ? (
-          <section className="mb-8 grid gap-4 md:grid-cols-3">
+          <section className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <SummaryCard title="Total badcases / 总数" value={stats.total} />
             <SummaryCard title="Top source formats / 源格式 Top 5" entries={topEntries(stats.by_source_format)} />
             <SummaryCard title="Top error types / 错误类型 Top 5" entries={topEntries(stats.by_error_type)} />
+            <SummaryCard title="Severity / 严重程度" entries={topEntries(stats.by_severity)} />
           </section>
         ) : (
-          <section className="mb-8 grid gap-4 md:grid-cols-3">
-            {Array.from({ length: 3 }, (_, index) => <Skeleton key={index} className="h-32 rounded-2xl" />)}
+          <section className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="h-32 rounded-2xl" />)}
           </section>
         )}
 
@@ -295,6 +297,7 @@ export default function BadCasesPage() {
                         </div>
                         <p className="mt-3 line-clamp-2 break-words text-sm leading-6 text-muted-foreground">{item.error_message}</p>
                         <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+                          <SeverityBadge severity={item.severity} />
                           <span>{item.error_type}</span><span>·</span><span>{formatBytes(item.file_size)}</span>
                         </div>
                       </div>

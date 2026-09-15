@@ -5,6 +5,43 @@ type ApiErrorBody = {
   detail?: string;
 };
 
+export type NonJsonResponsePayload = {
+  error: "Server returned non-JSON response";
+  status: number;
+  body: string;
+};
+
+export class NonJsonResponseError extends Error implements NonJsonResponsePayload {
+  readonly error = "Server returned non-JSON response" as const;
+  readonly status: number;
+  readonly body: string;
+
+  constructor(status: number, body: string) {
+    super("服务器返回异常响应，请查看后端日志");
+    this.name = "NonJsonResponseError";
+    this.status = status;
+    this.body = body.slice(0, 200);
+  }
+}
+
+export async function parseJsonResponse<T>(response: Response): Promise<T> {
+  // 先读取文本，确保 HTML 或纯文本错误页不会直接产生难懂的 JSON.parse 异常。
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new NonJsonResponseError(response.status, text);
+  }
+}
+
+function apiErrorMessage(body: unknown, status: number): string {
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as ApiErrorBody).detail;
+    if (typeof detail === "string" && detail) return detail;
+  }
+  return `请求失败 (${status})`;
+}
+
 export async function fetchJson<T>(
   path: string,
   options?: RequestInit,
@@ -16,19 +53,9 @@ export async function fetchJson<T>(
       ...options?.headers,
     },
   });
-
-  if (!response.ok) {
-    let message = `请求失败 (${response.status})`;
-    try {
-      const body = (await response.json()) as ApiErrorBody;
-      if (body.detail) message = body.detail;
-    } catch {
-      // 响应不是 JSON 时保留 HTTP 状态信息。
-    }
-    throw new Error(message);
-  }
-
-  return (await response.json()) as T;
+  const body = await parseJsonResponse<T>(response);
+  if (!response.ok) throw new Error(apiErrorMessage(body, response.status));
+  return body;
 }
 
 export type DownloadedFile = {
@@ -42,14 +69,8 @@ export async function fetchDownload(path: string): Promise<DownloadedFile> {
   });
 
   if (!response.ok) {
-    let message = `导出失败 (${response.status})`;
-    try {
-      const body = (await response.json()) as ApiErrorBody;
-      if (body.detail) message = body.detail;
-    } catch {
-      // 非 JSON 错误响应沿用 HTTP 状态信息。
-    }
-    throw new Error(message);
+    const body = await parseJsonResponse<unknown>(response);
+    throw new Error(apiErrorMessage(body, response.status));
   }
 
   const disposition = response.headers.get("Content-Disposition") ?? "";

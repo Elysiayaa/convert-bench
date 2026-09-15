@@ -1,3 +1,5 @@
+export type Severity = "warning" | "error" | "critical";
+
 export type BadCase = {
   case_id: string;
   original_filename: string;
@@ -6,6 +8,12 @@ export type BadCase = {
   file_size: number;
   error_message: string;
   error_type: string;
+  severity: Severity;
+  image_dimensions: {
+    width: number;
+    height: number;
+    total_pixels: number;
+  } | null;
   captured_at: string;
 };
 
@@ -21,6 +29,7 @@ export type BadCaseStats = {
   by_source_format: Record<string, number>;
   by_target_format: Record<string, number>;
   by_error_type: Record<string, number>;
+  by_severity: Record<Severity, number>;
   by_date: Record<string, number>;
 };
 

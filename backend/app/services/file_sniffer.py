@@ -12,6 +12,11 @@ SniffedFileType = Literal[
     "docx",
     "zip",
     "pdf",
+    "png",
+    "jpg",
+    "gif",
+    "bmp",
+    "webp",
     "json",
     "yaml",
     "csv",
@@ -23,6 +28,12 @@ SniffedFileType = Literal[
 
 _MIME_TYPE_MAP: dict[str, SniffedFileType] = {
     "application/pdf": "pdf",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/bmp": "bmp",
+    "image/x-ms-bmp": "bmp",
+    "image/webp": "webp",
     "application/json": "json",
     "application/ld+json": "json",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
@@ -36,6 +47,8 @@ _MIME_TYPE_MAP: dict[str, SniffedFileType] = {
 }
 
 _DECLARED_TYPE_ALIASES = {
+    "jpeg": "jpg",
+    "jpe": "jpg",
     "md": "markdown",
     "markdown": "markdown",
     "txt": "text",
@@ -59,6 +72,17 @@ def sniff_file_type(file_path: str | Path) -> SniffedFileType:
         return magic_result
 
     prefix = _read_prefix(path)
+    # 图片格式使用稳定的文件签名识别，不依赖文件扩展名。
+    if prefix.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if prefix.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if prefix.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    if prefix.startswith(b"BM"):
+        return "bmp"
+    if len(prefix) >= 12 and prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP":
+        return "webp"
     if prefix.startswith(b"%PDF"):
         return "pdf"
     if prefix.startswith(b"PK\x03\x04"):
